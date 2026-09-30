@@ -290,6 +290,7 @@
       <div class="group-title">Extract</div>
       <button class="generate" id="btnExtract" type="button" disabled>Re-extract colors</button>
       <button class="plain" id="btnCopyAll" type="button" disabled>Copy as CSS variables</button>
+      <button class="plain" id="btnDownload" type="button" disabled>Download palette as PNG</button>
       <div class="status" id="status" aria-live="polite"></div>
       <div class="hint">Each run starts from new random seeds, so close shades can merge or split differently. Percentages cover the whole image and leave out transparent areas.</div>
     </div>
@@ -369,7 +370,7 @@
 
     $('work').classList.remove('empty');
     $('drop').hidden = true; $('viewer').hidden = false; $('list').hidden = false;
-    $('btnExtract').disabled = false; $('btnCopyAll').disabled = false;
+    $('btnExtract').disabled = false; $('btnCopyAll').disabled = false; $('btnDownload').disabled = false;
     $('btnChoose').textContent = 'Change image';
     extract();
     say('Loaded ' + state.name);
@@ -603,6 +604,109 @@
     const ok = await copyText(css);
     say(ok ? 'Copied ' + state.colors.length + ' colors as CSS variables.' : 'Copy failed. Copy each HEX instead.', !ok);
   });
+
+  /* ---------- PNG export ---------- */
+  /* Layout in CSS pixels, rendered at 2x. Mirrors the reference card: double rail frame
+     with corner diamonds, serif title + color count, one framed card per color. */
+  const EXPORT = {
+    scale:2, pad:56, top:110, bottom:56,
+    cardW:200, cardH:346, gap:12, inset:6, swatchH:254,
+    textX:14, hexY:296, rgbY:322, maxCols:5,
+    title:'Extracted palette'
+  };
+  const EXPORT_COLORS = {
+    bg:'#0d0f14', panel:'#14171f', edge:'#232732', line:'#252a35',
+    blue:'#3f6fa8', blue2:'#5c7f9e', ink:'#e7eaf0', soft:'#727c8c',
+    railOuter:'rgba(231,234,240,.6)', railInner:'rgba(92,127,158,.35)', ring:'rgba(231,234,240,.5)'
+  };
+
+  function drawPaletteCard(colors){
+    const E = EXPORT, P = EXPORT_COLORS, n = colors.length;
+    const cols = n <= E.maxCols ? n : Math.ceil(n / 2);
+    const rows = Math.ceil(n / cols);
+    const W = E.pad * 2 + cols * E.cardW + (cols - 1) * E.gap;
+    const H = E.top + rows * E.cardH + (rows - 1) * E.gap + E.bottom;
+
+    const cv = document.createElement('canvas');
+    cv.width = W * E.scale; cv.height = H * E.scale;
+    const ctx = cv.getContext('2d');
+    ctx.scale(E.scale, E.scale);
+
+    const rect = (x, y, w, h, color) => { ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.strokeRect(x, y, w, h); };
+    const diamond = (x, y) => {
+      ctx.save(); ctx.translate(x, y); ctx.rotate(Math.PI / 4);
+      ctx.fillStyle = P.ring;  ctx.fillRect(-6.5, -6.5, 13, 13);
+      ctx.fillStyle = P.bg;    ctx.fillRect(-5.5, -5.5, 11, 11);
+      ctx.fillStyle = P.blue;  ctx.fillRect(-4.5, -4.5, 9, 9);
+      ctx.restore();
+    };
+
+    /* background and rail frame */
+    ctx.fillStyle = P.bg; ctx.fillRect(0, 0, W, H);
+    rect(16.5, 16.5, W - 33, H - 33, P.railOuter);
+    rect(21.5, 21.5, W - 43, H - 43, P.railInner);
+    [[16.5, 16.5], [W - 16.5, 16.5], [16.5, H - 16.5], [W - 16.5, H - 16.5]].forEach(([x, y]) => diamond(x, y));
+
+    /* title and count */
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = P.ink;
+    ctx.font = '700 24px "Playfair Display", Georgia, serif';
+    ctx.fillText(E.title, E.pad, 80);
+    const tw = ctx.measureText(E.title).width;
+    ctx.fillStyle = P.blue2;
+    ctx.font = '400 12px "Space Grotesk", system-ui, sans-serif';
+    ctx.fillText(n + (n === 1 ? ' color' : ' colors'), E.pad + tw + 16, 80);
+
+    /* color cards */
+    colors.forEach((c, i) => {
+      const x = E.pad + (i % cols) * (E.cardW + E.gap);
+      const y = E.top + Math.floor(i / cols) * (E.cardH + E.gap);
+      ctx.fillStyle = P.panel; ctx.fillRect(x, y, E.cardW, E.cardH);
+      rect(x + .5, y + .5, E.cardW - 1, E.cardH - 1, P.line);
+      rect(x + 3.5, y + 3.5, E.cardW - 7, E.cardH - 7, P.edge);
+
+      ctx.fillStyle = c.hex;
+      ctx.fillRect(x + E.inset, y + E.inset, E.cardW - E.inset * 2, E.swatchH);
+
+      ctx.fillStyle = P.ink;
+      ctx.font = '500 19px "IBM Plex Mono", ui-monospace, Menlo, monospace';
+      ctx.fillText(c.hex, x + E.textX, y + E.hexY);
+      ctx.fillStyle = P.soft;
+      ctx.font = '400 12px "IBM Plex Mono", ui-monospace, Menlo, monospace';
+      ctx.fillText('rgb(' + c.rgb.join(', ') + ')', x + E.textX, y + E.rgbY);
+    });
+    return cv;
+  }
+
+  async function downloadPng(){
+    if(!state.colors.length) return;
+    const btn = $('btnDownload');
+    btn.disabled = true;
+    try {
+      /* canvas only draws web fonts that are already loaded */
+      await Promise.all([
+        '700 24px "Playfair Display"', '400 12px "Space Grotesk"',
+        '500 19px "IBM Plex Mono"', '400 12px "IBM Plex Mono"'
+      ].map(f => document.fonts.load(f))).catch(() => {});
+
+      const cv = drawPaletteCard(state.colors);
+      const blob = await new Promise(r => cv.toBlob(r, 'image/png'));
+      if(!blob) throw new Error('empty');
+
+      const name = 'palette-' + state.colors.map(c => c.hex.slice(1).toLowerCase()).join('-') + '.png';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      say('Downloaded ' + name);
+    } catch(e){
+      say('The PNG could not be created. Try again.', true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  $('btnDownload').addEventListener('click', downloadPng);
 
   /* drag and drop anywhere on the stage */
   const frame = $('frame'), stage = document.querySelector('.stage');
