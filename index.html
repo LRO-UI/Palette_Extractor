@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Palette extractor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=IBM+Plex+Mono:wght@400;500&family=Playfair+Display:wght@400..900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    box-sizing:border-box;
+    padding-top:env(safe-area-inset-top,0px);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+    color-scheme:dark;
+    --bg:#0d0f14; --panel:#14171f; --panel-edge:#232732;
+    --blue:#3f6fa8; --blue2:#5c7f9e; --steel:#7c8698;
+    --ink:#e7eaf0; --ink-soft:#727c8c; --line:#252a35;
+    --ok:#7fa88a; --danger:#c77a7a;
+    --font-ui:'Space Grotesk', system-ui, sans-serif;
+    --font-display:'Playfair Display', Georgia, serif;
+    --font-mono:'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  }
+  /* The theme is dark by design; keep it dark in every viewer setting */
+  @media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){ --bg:#0d0f14; --ink:#e7eaf0; } }
+  :root[data-theme="dark"]{ --bg:#0d0f14; --ink:#e7eaf0; }
+
+  html{ scroll-padding-top:env(safe-area-inset-top,0px); height:100%; }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; min-height:100%; background:var(--bg); color:var(--ink);
+    font-family:var(--font-ui); display:flex; flex-direction:column;
+  }
+  [hidden]{ display:none !important; }
+
+  header{
+    padding:22px 30px; border-bottom:4px double var(--blue2);
+    display:flex; align-items:baseline; gap:16px; flex-wrap:wrap;
+  }
+  header h1{ margin:0; font-family:var(--font-display); font-weight:800; font-size:1.5rem; letter-spacing:.02em; }
+  header p{ margin:0; font-size:.78rem; color:var(--ink-soft); }
+  .app{ display:flex; flex:1; flex-wrap:wrap; }
+
+  /* Stage */
+  .stage{
+    flex:3 1 560px; min-width:0; padding:40px; display:flex; align-items:stretch;
+    border-right:1px solid var(--line);
+  }
+  .rail-frame{ position:relative; flex:1; display:flex; min-height:520px; min-width:0; }
+  .rail-frame::before, .rail-frame::after{ content:''; position:absolute; pointer-events:none; z-index:2; }
+  .rail-frame::before{ inset:8px; border:1px solid rgba(231,234,240,.6); }
+  .rail-frame::after{ inset:13px; border:1px solid rgba(92,127,158,.35); }
+  .rail-frame.dragging::after{ border-color:var(--blue); border-width:2px; }
+  .rail-d{
+    position:absolute; width:10px; height:10px; z-index:3;
+    background:var(--blue); border:2px solid var(--bg);
+    transform:translate(-50%,-50%) rotate(45deg);
+    box-shadow:0 0 0 1px rgba(231,234,240,.5);
+  }
+  .rail-d.tl{top:8px; left:8px;} .rail-d.tr{top:8px; left:calc(100% - 8px);}
+  .rail-d.bl{top:calc(100% - 8px); left:8px;} .rail-d.br{top:calc(100% - 8px); left:calc(100% - 8px);}
+
+  .preview{
+    flex:1; margin:34px; display:flex; flex-direction:column; gap:16px;
+    min-width:0; position:relative; z-index:4;
+  }
+  .meta{ display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    font-size:.72rem; letter-spacing:.06em; font-variant-numeric:tabular-nums; }
+  .meta .dims{ color:var(--blue2); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .meta .tip{ color:var(--ink-soft); }
+  kbd{ font-family:var(--font-mono); font-size:.68rem; border:1px solid var(--line); padding:1px 5px; color:var(--ink); }
+
+  /* Work area */
+  .work{
+    flex:1; display:grid; grid-template-columns:minmax(0,1.25fr) minmax(270px,1fr);
+    gap:22px; align-items:start; min-width:0;
+  }
+  .work.empty{ grid-template-columns:1fr; align-items:stretch; }
+
+  .drop{
+    width:100%; min-height:380px; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:12px; padding:30px; cursor:pointer; text-align:center;
+    background:var(--panel); color:var(--ink-soft); border:1px dashed var(--panel-edge);
+    font-family:var(--font-ui);
+  }
+  .drop:hover, .drop.over{ border-color:var(--blue2); background:rgba(63,111,168,.08); }
+  .drop:focus-visible{ outline:1px solid #fff; outline-offset:2px; }
+  .drop .big{ font-family:var(--font-display); font-weight:700; font-size:1.3rem; color:var(--ink); }
+  .drop .small{ font-size:.78rem; line-height:1.5; max-width:36ch; }
+  .drop .dia{ width:14px; height:14px; background:var(--blue); transform:rotate(45deg);
+    border:2px solid var(--panel); box-shadow:0 0 0 1px rgba(231,234,240,.5); margin-bottom:6px; }
+
+  .viewer{ display:flex; flex-direction:column; gap:10px; min-width:0; align-items:flex-start; }
+  .imgbox{
+    position:relative; max-width:100%; background:var(--panel);
+    border:1px solid var(--line); padding:6px;
+    box-shadow:inset 0 0 0 3px var(--panel), inset 0 0 0 4px var(--panel-edge);
+  }
+  .imgbox .inner{ position:relative; width:100%; height:100%; }
+  .imgbox img, .imgbox canvas{ position:absolute; inset:0; width:100%; height:100%; display:block; }
+  .imgbox canvas{ opacity:0; transition:opacity .18s ease-out; pointer-events:none; }
+  .imgbox canvas.on{ opacity:1; }
+  .viewer .cap{ font-size:.7rem; color:var(--ink-soft); min-height:1.1em; }
+
+  .strip{
+    width:100%; display:flex; height:26px; padding:3px;
+    background:var(--panel); border:1px solid var(--line);
+  }
+  .seg{ min-width:2px; height:100%; border:0; padding:0; cursor:pointer; position:relative; }
+  .seg:focus-visible{ outline:1px solid #fff; outline-offset:1px; z-index:1; }
+  .seg.active{ box-shadow:inset 0 0 0 1px var(--bg), inset 0 0 0 2px #fff; }
+
+  /* Swatch list */
+  .list{ display:flex; flex-direction:column; gap:8px; min-width:0; }
+  .row{
+    display:grid; grid-template-columns:52px minmax(0,1fr) auto auto; gap:12px; align-items:center;
+    background:var(--panel); border:1px solid var(--line); padding:8px 8px 12px;
+    box-shadow:inset 0 0 0 3px var(--panel), inset 0 0 0 4px var(--panel-edge);
+    position:relative;
+  }
+  .row.active{ border-color:var(--blue2); }
+  .row .chip{ width:52px; height:52px; margin-left:2px; }
+  .row .codes{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .code{
+    background:none; border:0; padding:2px 0; margin:0; text-align:left; cursor:pointer;
+    font-family:var(--font-mono); color:var(--ink); min-width:0;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .code.hex{ font-size:.95rem; font-weight:500; letter-spacing:.02em; }
+  .code.rgb{ font-size:.68rem; color:var(--ink-soft); }
+  .code:hover{ color:#fff; }
+  .code:focus-visible{ outline:1px solid #fff; outline-offset:2px; }
+  .code.done{ color:var(--ok); }
+
+  .pct{ text-align:right; min-width:74px; }
+  .pct b{ font-family:var(--font-display); font-weight:700; font-size:1.45rem; line-height:1; font-variant-numeric:tabular-nums; }
+  .pct span{ font-size:.72rem; color:var(--ink-soft); margin-left:2px; }
+
+  .acts{ display:flex; flex-direction:column; gap:4px; }
+  .ic{
+    width:30px; height:26px; display:grid; place-items:center; cursor:pointer;
+    background:transparent; border:1px solid var(--line); color:var(--ink-soft); padding:0;
+  }
+  .ic svg{ width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.4; stroke-linecap:square; }
+  .ic:hover{ color:var(--ink); border-color:var(--blue2); }
+  .ic:focus-visible{ outline:1px solid #fff; outline-offset:2px; }
+  .ic.on{ color:#fff; border-color:var(--blue); background:rgba(63,111,168,.22); }
+  .ic.done{ color:var(--ok); border-color:var(--ok); }
+
+  .bar{ position:absolute; left:10px; right:10px; bottom:6px; height:2px; background:var(--line); }
+  .bar i{ display:block; height:100%; width:0; }
+
+  /* Side panel */
+  .side{
+    flex:1 1 300px; min-width:0; padding:30px 28px;
+    display:flex; flex-direction:column; gap:28px; overflow:auto;
+  }
+  .group-title{
+    display:flex; align-items:center; gap:10px;
+    text-transform:uppercase; letter-spacing:.26em; font-size:.66rem;
+    color:var(--ink-soft); margin-bottom:12px;
+  }
+  .group-title::before{ content:''; width:6px; height:6px; background:var(--blue); transform:rotate(45deg); flex:none; }
+  .group-title::after{ content:''; flex:1; height:3px; border-top:1px solid var(--blue); border-bottom:1px solid var(--blue2); }
+  .hint{ font-size:.72rem; color:var(--ink-soft); line-height:1.5; margin-top:10px; }
+
+  .count-row{ display:grid; grid-template-columns:1fr auto 1fr; gap:8px; align-items:stretch; }
+  .count{
+    min-width:64px; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    border:1px solid var(--line); padding:4px 10px;
+  }
+  .count b{ font-family:var(--font-display); font-weight:700; font-size:1.35rem; line-height:1; font-variant-numeric:tabular-nums; }
+  .count span{ font-size:.62rem; color:var(--ink-soft); margin-top:3px; }
+
+  button.tool{
+    --c:var(--blue2);
+    border:1px solid var(--line); background:
+      linear-gradient(var(--c),var(--c)) top left/8px 1px no-repeat,
+      linear-gradient(var(--c),var(--c)) top left/1px 8px no-repeat,
+      linear-gradient(var(--c),var(--c)) top right/8px 1px no-repeat,
+      linear-gradient(var(--c),var(--c)) top right/1px 8px no-repeat,
+      linear-gradient(var(--c),var(--c)) bottom left/8px 1px no-repeat,
+      linear-gradient(var(--c),var(--c)) bottom left/1px 8px no-repeat,
+      linear-gradient(var(--c),var(--c)) bottom right/8px 1px no-repeat,
+      linear-gradient(var(--c),var(--c)) bottom right/1px 8px no-repeat,
+      var(--panel);
+    box-shadow:inset 0 0 0 3px var(--panel), inset 0 0 0 4px var(--panel-edge);
+    color:var(--ink); font-family:var(--font-ui); font-size:.78rem;
+    letter-spacing:.06em; padding:13px 8px; cursor:pointer;
+  }
+  button.tool:hover{ --c:#fff; }
+  button.tool:focus-visible{ outline:1px solid #fff; outline-offset:2px; }
+  button.tool:disabled{ opacity:.35; cursor:not-allowed; --c:var(--line); }
+  button.tool.wide{ width:100%; }
+
+  button.generate{
+    width:100%; background:var(--blue); border:1px solid var(--blue2); color:#fff;
+    font-family:var(--font-ui); font-size:.8rem; font-weight:500; text-transform:uppercase; letter-spacing:.24em;
+    padding:24px 10px; cursor:pointer;
+    box-shadow:inset 0 0 0 4px var(--blue), inset 0 0 0 5px rgba(231,234,240,.4);
+  }
+  button.generate:hover{ background:#4a7cb8; box-shadow:inset 0 0 0 4px #4a7cb8, inset 0 0 0 5px rgba(231,234,240,.55); }
+  button.generate:focus-visible{ outline:1px solid #fff; outline-offset:2px; }
+  button.generate:disabled{ opacity:.35; cursor:not-allowed; }
+  button.plain{
+    width:100%; margin-top:8px; background:transparent; border:1px solid var(--line);
+    color:var(--ink-soft); font-family:var(--font-ui); font-size:.68rem; text-transform:uppercase;
+    letter-spacing:.2em; padding:11px 10px; cursor:pointer;
+  }
+  button.plain:hover{ color:var(--ink); border-color:var(--blue2); }
+  button.plain:focus-visible{ outline:1px solid #fff; outline-offset:2px; }
+  button.plain:disabled{ opacity:.35; cursor:not-allowed; }
+  .status{ font-size:.72rem; color:var(--ink-soft); margin-top:8px; min-height:1.1em; }
+  .status.err{ color:var(--danger); }
+
+  @media (max-width:980px){
+    .work{ grid-template-columns:1fr; }
+  }
+  @media (max-width:760px){
+    header{ padding:18px 20px; }
+    .stage{ border-right:none; border-bottom:1px solid var(--line); padding:18px; flex-basis:100%; }
+    .rail-frame{ min-height:0; }
+    .preview{ margin:30px 24px; }
+    .drop{ min-height:260px; }
+    .side{ padding:24px 20px; flex-basis:100%; }
+    .meta .tip{ display:none; }
+  }
+  @media (prefers-reduced-motion:reduce){ .imgbox canvas{ transition:none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Palette extractor</h1>
+  <p>Pull the main colors out of an image and see how much of it each one covers.</p>
+</header>
+
+<div class="app">
+  <div class="stage">
+    <div class="rail-frame" id="frame">
+      <div class="rail-d tl"></div><div class="rail-d tr"></div>
+      <div class="rail-d bl"></div><div class="rail-d br"></div>
+      <div class="preview">
+        <div class="meta">
+          <div class="dims" id="dims">No image loaded</div>
+          <div class="tip">Press <kbd>R</kbd> to re-extract</div>
+        </div>
+
+        <div class="work empty" id="work">
+          <button class="drop" id="drop" type="button">
+            <span class="dia" aria-hidden="true"></span>
+            <span class="big">Drop an image here</span>
+            <span class="small">Or click to choose a file. You can also paste an image with Ctrl+V. JPG, PNG, WebP and GIF work.</span>
+          </button>
+
+          <div class="viewer" id="viewer" hidden>
+            <div class="imgbox" id="imgbox">
+              <div class="inner">
+                <img id="img" alt="Uploaded image">
+                <canvas id="mask" aria-hidden="true"></canvas>
+              </div>
+            </div>
+            <div class="strip" id="strip" role="group" aria-label="Share of each color"></div>
+            <div class="cap" id="cap">Hover a color to see where it appears.</div>
+          </div>
+
+          <div class="list" id="list" aria-label="Extracted colors" hidden></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="side">
+    <div>
+      <div class="group-title">Image</div>
+      <button class="tool wide" id="btnChoose" type="button">Choose image</button>
+      <input type="file" id="file" accept="image/*" hidden>
+      <div class="hint">The image stays in your browser. Nothing is uploaded.</div>
+    </div>
+
+    <div>
+      <div class="group-title">Colors</div>
+      <div class="count-row">
+        <button class="tool" id="btnRemove" type="button">Fewer</button>
+        <div class="count" aria-live="polite"><b id="countVal">6</b><span>of 10</span></div>
+        <button class="tool" id="btnAdd" type="button">More</button>
+      </div>
+      <div class="hint">Between 2 and 10. More colors split large areas into finer shades.</div>
+    </div>
+
+    <div>
+      <div class="group-title">Extract</div>
+      <button class="generate" id="btnExtract" type="button" disabled>Re-extract colors</button>
+      <button class="plain" id="btnCopyAll" type="button" disabled>Copy as CSS variables</button>
+      <div class="status" id="status" aria-live="polite"></div>
+      <div class="hint">Each run starts from new random seeds, so close shades can merge or split differently. Percentages cover the whole image and leave out transparent areas.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const MIN = 2, MAX = 10, MAX_SIDE = 400, SAMPLE = 24000, ITER = 16;
+
+  const ICONS = {
+    copy:'<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="9"/><path d="M3 11V2h7"/></svg>',
+    check:'<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg>',
+    eye:'<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>'
+  };
+
+  const state = {
+    k:6, w:0, h:0, name:'', data:null, lab:null, valid:null, validIdx:null,
+    colors:[], assign:null, maskCache:{}, pinned:-1, hover:-1, url:null
+  };
+
+  /* ---------- color math ---------- */
+  const LIN = new Float32Array(256);
+  for(let i = 0; i < 256; i++){ const c = i / 255; LIN[i] = c <= .04045 ? c / 12.92 : Math.pow((c + .055) / 1.055, 2.4); }
+  const fLab = t => t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116;
+  function toLab(r, g, b, out, o){
+    const R = LIN[r], G = LIN[g], B = LIN[b];
+    const x = fLab((R * .4124 + G * .3576 + B * .1805) / .95047);
+    const y = fLab( R * .2126 + G * .7152 + B * .0722);
+    const z = fLab((R * .0193 + G * .1192 + B * .9505) / 1.08883);
+    out[o] = 116 * y - 16; out[o + 1] = 500 * (x - y); out[o + 2] = 200 * (y - z);
+  }
+  const toHex = rgb => '#' + rgb.map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase();
+
+  /* ---------- load image ---------- */
+  function loadFile(file){
+    if(!file || !file.type || !file.type.startsWith('image/')){
+      say('That file is not an image. Choose a JPG, PNG, WebP or GIF.', true); return;
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      if(state.url) URL.revokeObjectURL(state.url);
+      state.url = url; state.name = file.name || 'Pasted image';
+      prepare(img);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); say('This image could not be read. Try another file.', true); };
+    img.src = url;
+  }
+
+  function prepare(img){
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const s = Math.min(1, MAX_SIDE / Math.max(W, H));
+    const w = Math.max(1, Math.round(W * s)), h = Math.max(1, Math.round(H * s));
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const ctx = cv.getContext('2d', { willReadFrequently:true });
+    ctx.drawImage(img, 0, 0, w, h);
+    const data = ctx.getImageData(0, 0, w, h).data;
+
+    const n = w * h, lab = new Float32Array(n * 3), valid = new Uint8Array(n), idx = [];
+    for(let i = 0; i < n; i++){
+      const p = i * 4;
+      if(data[p + 3] < 128) continue;
+      valid[i] = 1; idx.push(i);
+      toLab(data[p], data[p + 1], data[p + 2], lab, i * 3);
+    }
+    if(!idx.length){ say('This image is fully transparent, so there are no colors to extract.', true); return; }
+
+    Object.assign(state, { w, h, data, lab, valid, validIdx:Int32Array.from(idx), natW:W, natH:H });
+
+    $('img').src = state.url;
+    const box = $('imgbox'), ar = W / H;
+    box.querySelector('.inner').style.aspectRatio = W + ' / ' + H;
+    box.style.width = 'min(100%, calc(58vh * ' + ar.toFixed(4) + ' + 14px))';
+    const mask = $('mask'); mask.width = w; mask.height = h;
+
+    $('work').classList.remove('empty');
+    $('drop').hidden = true; $('viewer').hidden = false; $('list').hidden = false;
+    $('btnExtract').disabled = false; $('btnCopyAll').disabled = false;
+    $('btnChoose').textContent = 'Change image';
+    extract();
+    say('Loaded ' + state.name);
+  }
+
+  /* ---------- k-means in Lab space ---------- */
+  function extract(){
+    if(!state.lab) return;
+    const { lab, validIdx } = state, k = state.k;
+    const V = validIdx.length;
+
+    /* random sample of pixels for fitting */
+    const m = Math.min(SAMPLE, V), sample = new Int32Array(m);
+    if(V <= SAMPLE) sample.set(validIdx);
+    else for(let i = 0; i < m; i++) sample[i] = validIdx[(Math.random() * V) | 0];
+
+    const d2 = (i, c, C) => {
+      const a = i * 3, b = c * 3;
+      const x = lab[a] - C[b], y = lab[a + 1] - C[b + 1], z = lab[a + 2] - C[b + 2];
+      return x * x + y * y + z * z;
+    };
+
+    /* k-means++ seeding */
+    const C = new Float32Array(k * 3);
+    const first = sample[(Math.random() * m) | 0] * 3;
+    C[0] = lab[first]; C[1] = lab[first + 1]; C[2] = lab[first + 2];
+    const dist = new Float32Array(m).fill(Infinity);
+    for(let c = 1; c < k; c++){
+      let sum = 0;
+      for(let s = 0; s < m; s++){ const d = d2(sample[s], c - 1, C); if(d < dist[s]) dist[s] = d; sum += dist[s]; }
+      let r = Math.random() * sum, pick = m - 1;
+      for(let s = 0; s < m; s++){ r -= dist[s]; if(r <= 0){ pick = s; break; } }
+      const p = sample[pick] * 3;
+      C[c * 3] = lab[p]; C[c * 3 + 1] = lab[p + 1]; C[c * 3 + 2] = lab[p + 2];
+    }
+
+    const nearest = i => {
+      let best = 0, bd = Infinity;
+      for(let c = 0; c < k; c++){ const d = d2(i, c, C); if(d < bd){ bd = d; best = c; } }
+      return best;
+    };
+
+    const lbl = new Int16Array(m);
+    for(let it = 0; it < ITER; it++){
+      const acc = new Float64Array(k * 3), cnt = new Uint32Array(k);
+      for(let s = 0; s < m; s++){
+        const i = sample[s], c = nearest(i); lbl[s] = c; cnt[c]++;
+        acc[c * 3] += lab[i * 3]; acc[c * 3 + 1] += lab[i * 3 + 1]; acc[c * 3 + 2] += lab[i * 3 + 2];
+      }
+      let moved = 0;
+      for(let c = 0; c < k; c++){
+        if(!cnt[c]){
+          const p = sample[(Math.random() * m) | 0] * 3;
+          C[c * 3] = lab[p]; C[c * 3 + 1] = lab[p + 1]; C[c * 3 + 2] = lab[p + 2]; moved += 99; continue;
+        }
+        for(let j = 0; j < 3; j++){
+          const v = acc[c * 3 + j] / cnt[c]; moved += Math.abs(v - C[c * 3 + j]); C[c * 3 + j] = v;
+        }
+      }
+      if(moved < .5) break;
+    }
+
+    /* assign every pixel, count shares and average the real RGB values */
+    const n = state.w * state.h, assign = new Int16Array(n).fill(-1);
+    const cnt = new Uint32Array(k), rgbSum = new Float64Array(k * 3), data = state.data;
+    for(let v = 0; v < V; v++){
+      const i = validIdx[v], c = nearest(i); assign[i] = c; cnt[c]++;
+      rgbSum[c * 3] += data[i * 4]; rgbSum[c * 3 + 1] += data[i * 4 + 1]; rgbSum[c * 3 + 2] += data[i * 4 + 2];
+    }
+
+    let colors = [];
+    for(let c = 0; c < k; c++){
+      if(!cnt[c]) continue;
+      const rgb = [0, 1, 2].map(j => Math.round(rgbSum[c * 3 + j] / cnt[c]));
+      colors.push({ src:c, rgb, hex:toHex(rgb), count:cnt[c], pct:cnt[c] / V * 100 });
+    }
+    colors.sort((a, b) => b.count - a.count);
+    const remap = new Int16Array(k).fill(-1);
+    colors.forEach((c, i) => { remap[c.src] = i; });
+    for(let i = 0; i < n; i++) if(assign[i] >= 0) assign[i] = remap[assign[i]];
+
+    state.colors = colors; state.assign = assign; state.maskCache = {};
+    state.pinned = -1; state.hover = -1;
+    render(true);
+    if(colors.length < k) say('Found ' + colors.length + ' distinct colors. The image has fewer colors than requested.');
+  }
+
+  /* ---------- highlight mask ---------- */
+  function maskFor(i){
+    if(state.maskCache[i]) return state.maskCache[i];
+    const { w, h, assign } = state, img = new ImageData(w, h), d = img.data;
+    for(let p = 0; p < w * h; p++){
+      if(assign[p] === i) continue;
+      d[p * 4] = 13; d[p * 4 + 1] = 15; d[p * 4 + 2] = 20; d[p * 4 + 3] = 215;
+    }
+    return (state.maskCache[i] = img);
+  }
+  function showMask(){
+    const i = state.hover >= 0 ? state.hover : state.pinned;
+    const mask = $('mask');
+    document.querySelectorAll('.row').forEach((r, j) => r.classList.toggle('active', j === i));
+    document.querySelectorAll('.seg').forEach((s, j) => s.classList.toggle('active', j === i));
+    if(i < 0 || !state.colors[i]){
+      mask.classList.remove('on');
+      $('cap').textContent = 'Hover a color to see where it appears.';
+      return;
+    }
+    mask.getContext('2d').putImageData(maskFor(i), 0, 0);
+    mask.classList.add('on');
+    const c = state.colors[i];
+    $('cap').textContent = c.hex + ' covers ' + c.pct.toFixed(1) + '% of the image' + (state.pinned === i ? ' (pinned)' : '') + '.';
+  }
+  const setHover = i => { state.hover = i; showMask(); };
+
+  /* ---------- clipboard ---------- */
+  async function copyText(text){
+    try { await navigator.clipboard.writeText(text); return true; }
+    catch(e){
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      let ok = false; try { ok = document.execCommand('copy'); } catch(_){}
+      ta.remove(); return ok;
+    }
+  }
+  function flash(el, ok, restore){
+    el.classList.toggle('done', ok);
+    setTimeout(() => { el.classList.remove('done'); restore && restore(); }, 1300);
+  }
+  function say(msg, err){ const s = $('status'); s.textContent = msg; s.classList.toggle('err', !!err); }
+
+  /* ---------- render ---------- */
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function render(animate){
+    const list = $('list'), strip = $('strip');
+    list.innerHTML = ''; strip.innerHTML = '';
+
+    state.colors.forEach((c, i) => {
+      const rgbText = 'rgb(' + c.rgb.join(', ') + ')';
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML =
+        '<div class="chip" style="background:' + c.hex + '"></div>' +
+        '<div class="codes">' +
+          '<button class="code hex" type="button" title="Copy HEX">' + c.hex + '</button>' +
+          '<button class="code rgb" type="button" title="Copy RGB">' + rgbText + '</button>' +
+        '</div>' +
+        '<div class="pct"><b>' + (animate && !reduceMotion ? '0.0' : c.pct.toFixed(1)) + '</b><span>%</span></div>' +
+        '<div class="acts">' +
+          '<button class="ic copy" type="button" aria-label="Copy ' + c.hex + '" title="Copy HEX">' + ICONS.copy + '</button>' +
+          '<button class="ic pin" type="button" aria-pressed="false" aria-label="Show ' + c.hex + ' on the image" title="Show on image">' + ICONS.eye + '</button>' +
+        '</div>' +
+        '<div class="bar"><i style="background:' + c.hex + ';width:' + (animate && !reduceMotion ? 0 : c.pct) + '%"></i></div>';
+
+      const [hexBtn, rgbBtn] = row.querySelectorAll('.code');
+      hexBtn.addEventListener('click', async () => { const ok = await copyText(c.hex); flash(hexBtn, ok); say(ok ? 'Copied ' + c.hex : 'Copy failed.', !ok); });
+      rgbBtn.addEventListener('click', async () => { const ok = await copyText(rgbText); flash(rgbBtn, ok); say(ok ? 'Copied ' + rgbText : 'Copy failed.', !ok); });
+      const copyBtn = row.querySelector('.copy');
+      copyBtn.addEventListener('click', async () => {
+        const ok = await copyText(c.hex);
+        copyBtn.innerHTML = ok ? ICONS.check : ICONS.copy;
+        flash(copyBtn, ok, () => { copyBtn.innerHTML = ICONS.copy; });
+        say(ok ? 'Copied ' + c.hex : 'Copy failed.', !ok);
+      });
+      row.querySelector('.pin').addEventListener('click', () => togglePin(i));
+      row.addEventListener('mouseenter', () => setHover(i));
+      row.addEventListener('mouseleave', () => setHover(-1));
+      list.appendChild(row);
+
+      const seg = document.createElement('button');
+      seg.type = 'button'; seg.className = 'seg';
+      seg.style.background = c.hex; seg.style.flex = '0 0 ' + c.pct + '%';
+      seg.title = c.hex + ', ' + c.pct.toFixed(1) + '%';
+      seg.setAttribute('aria-label', c.hex + ', ' + c.pct.toFixed(1) + ' percent. Show on image');
+      seg.addEventListener('mouseenter', () => setHover(i));
+      seg.addEventListener('mouseleave', () => setHover(-1));
+      seg.addEventListener('click', () => togglePin(i));
+      strip.appendChild(seg);
+    });
+
+    const nat = state.natW + ' × ' + state.natH;
+    $('dims').textContent = state.name + ', ' + nat + ', ' + state.colors.length + ' colors';
+    updateCount();
+    showMask();
+    if(animate && !reduceMotion) countUp();
+  }
+
+  function togglePin(i){
+    state.pinned = state.pinned === i ? -1 : i;
+    document.querySelectorAll('.row .pin').forEach((b, j) => {
+      const on = j === state.pinned; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
+    });
+    showMask();
+  }
+
+  function countUp(){
+    const nums = [...document.querySelectorAll('.row .pct b')];
+    const bars = [...document.querySelectorAll('.row .bar i')];
+    const t0 = performance.now(), dur = 650;
+    const step = t => {
+      const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+      state.colors.forEach((c, i) => {
+        if(nums[i]) nums[i].textContent = (c.pct * e).toFixed(1);
+        if(bars[i]) bars[i].style.width = (c.pct * e) + '%';
+      });
+      if(p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  function updateCount(){
+    $('countVal').textContent = state.k;
+    $('btnAdd').disabled = state.k >= MAX;
+    $('btnRemove').disabled = state.k <= MIN;
+  }
+
+  /* ---------- controls ---------- */
+  $('btnChoose').addEventListener('click', () => $('file').click());
+  $('drop').addEventListener('click', () => $('file').click());
+  $('file').addEventListener('change', e => { loadFile(e.target.files[0]); e.target.value = ''; });
+
+  $('btnExtract').addEventListener('click', () => { say(''); extract(); say('Extracted ' + state.colors.length + ' colors.'); });
+  $('btnAdd').addEventListener('click', () => { if(state.k >= MAX) return; state.k++; updateCount(); if(state.lab) extract(); });
+  $('btnRemove').addEventListener('click', () => { if(state.k <= MIN) return; state.k--; updateCount(); if(state.lab) extract(); });
+
+  $('btnCopyAll').addEventListener('click', async () => {
+    if(!state.colors.length) return;
+    const css = ':root{\n' + state.colors.map((c, i) =>
+      '  --color-' + (i + 1) + ': ' + c.hex + '; /* ' + c.pct.toFixed(1) + '% */').join('\n') + '\n}';
+    const ok = await copyText(css);
+    say(ok ? 'Copied ' + state.colors.length + ' colors as CSS variables.' : 'Copy failed. Copy each HEX instead.', !ok);
+  });
+
+  /* drag and drop anywhere on the stage */
+  const frame = $('frame'), stage = document.querySelector('.stage');
+  let dragDepth = 0;
+  stage.addEventListener('dragenter', e => { e.preventDefault(); dragDepth++; frame.classList.add('dragging'); $('drop').classList.add('over'); });
+  stage.addEventListener('dragover', e => e.preventDefault());
+  stage.addEventListener('dragleave', () => { if(--dragDepth <= 0){ dragDepth = 0; frame.classList.remove('dragging'); $('drop').classList.remove('over'); } });
+  stage.addEventListener('drop', e => {
+    e.preventDefault(); dragDepth = 0; frame.classList.remove('dragging'); $('drop').classList.remove('over');
+    const f = e.dataTransfer && e.dataTransfer.files[0];
+    if(f) loadFile(f); else say('Drop an image file from your computer.', true);
+  });
+
+  document.addEventListener('paste', e => {
+    const items = e.clipboardData ? [...e.clipboardData.items] : [];
+    const it = items.find(x => x.type && x.type.startsWith('image/'));
+    if(it){ e.preventDefault(); loadFile(it.getAsFile()); }
+  });
+
+  document.addEventListener('keydown', e => {
+    if(e.key !== 'r' && e.key !== 'R') return;
+    if(e.metaKey || e.ctrlKey || e.altKey || e.repeat || !state.lab) return;
+    const tag = (e.target.tagName || '').toLowerCase();
+    if(['input','textarea','select'].includes(tag)) return;
+    e.preventDefault(); extract(); say('Extracted ' + state.colors.length + ' colors.');
+  });
+
+  updateCount();
+})();
+</script>
+</body>
+</html>
