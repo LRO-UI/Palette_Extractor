@@ -1,4 +1,4 @@
-# Project Name
+# Palette Extractor
 
 A simple palette from image extractor.
 
